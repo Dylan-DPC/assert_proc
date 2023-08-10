@@ -1,36 +1,24 @@
-use crate::attributes::{AttributeBuilder, TYPE_OPTIONS};
+#![feature(let_chains)]
+#![feature(extract_if)]
+#![feature(if_let_guard)]
+
 use proc_macro::TokenStream;
-use syn::{parse_macro_input, Item, ItemStruct};
+use syn::{parse_macro_input, Item};
 
 mod attributes;
 mod generator;
 
 #[proc_macro_attribute]
 pub fn assert_proc(tokens: TokenStream, inputs: TokenStream) -> TokenStream {
-    let input_tokens = parse_macro_input!(inputs as Item);
+    let mut input_tokens = parse_macro_input!(inputs as Item);
     match input_tokens {
-        Item::Struct(s) => {
-            let validated = validate_fields(&s);
-            let validated_tokens = validated.prepare_tokens(s);
-            generator::generate_test_functions_for_struct(validated_tokens, tokens)
+        Item::Struct(ref mut s) => {
+            let validated_tokens = crate::attributes::prepare_tokens(s);
+
+            // s.attrs.iter().for_each(|attr| { dbg!(attr.meta.path().get_ident()); });
+            attributes::clean_up(&mut s.attrs);
+            validated_tokens
         }
         _ => todo!(),
     }
 }
-
-fn validate_fields(schtruct: &ItemStruct) -> AttributeBuilder {
-    let fields: u8 = schtruct
-        .attrs
-        .iter()
-        .filter_map(|attr| {
-            let path = attr.path().segments.first().unwrap().ident.to_string();
-            TYPE_OPTIONS
-                .iter()
-                .position(|opt| *opt == path)
-                .map(|pos| 1 << pos)
-        })
-        .sum();
-
-    AttributeBuilder::new(fields)
-}
-
