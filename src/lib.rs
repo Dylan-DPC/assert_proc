@@ -15,7 +15,6 @@ pub fn assert_proc(tokens: TokenStream, inputs: TokenStream) -> TokenStream {
         Item::Struct(ref mut s) => {
             let validated_tokens = crate::attributes::prepare_tokens(s);
 
-            // s.attrs.iter().for_each(|attr| { dbg!(attr.meta.path().get_ident()); });
             attributes::clean_up(&mut s.attrs);
             validated_tokens
         }

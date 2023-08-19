@@ -1,9 +1,22 @@
 use proc_macro::TokenStream;
 use quote::quote;
-use syn::{Attribute, Expr, ExprLit, Fields, ItemStruct, Lit, Meta};
+use syn::{Attribute, Expr, ExprLit, Field, Fields, ItemStruct, Lit, Meta};
+
+pub fn generate_tokens(
+    sigma: u8,
+    schtruct: &ItemStruct,
+    exprs: &[&Expr],
+    fields: &[&Field],
+) -> TokenStream {
+    match sigma {
+        1 => generate_stub_for_duplicate(schtruct, exprs[0]),
+        2 => generate_stub_for_type_change(schtruct, exprs[0], fields[0]),
+        _ => todo!(),
+    }
+}
 
 #[allow(clippy::manual_let_else)]
-pub fn generate_test_stub_for_duplicate(schtruct: &ItemStruct, expr: &Expr) -> TokenStream {
+pub fn generate_stub_for_duplicate(schtruct: &ItemStruct, expr: &Expr) -> TokenStream {
     let duplicated_name = match expr {
         Expr::Lit(ExprLit {
             lit: Lit::Str(l), ..
@@ -12,6 +25,65 @@ pub fn generate_test_stub_for_duplicate(schtruct: &ItemStruct, expr: &Expr) -> T
     };
 
     let duplicated_name: syn::Type = syn::parse_str(duplicated_name.value().as_str()).unwrap();
+    let initialiser = quote!(<#duplicated_name>::default());
+    let (struct_name, attributes, fields) = get_struct_parts(schtruct);
+
+    TokenStream::from(quote! {
+        mod tests {
+            use super::*;
+
+            #(#attributes)*
+            struct #struct_name {
+                #fields
+            }
+
+            pub fn foo() {
+                let f = #initialiser;
+            }
+        }
+    })
+}
+
+#[allow(clippy::manual_let_else)]
+pub fn generate_stub_for_type_change(
+    schtruct: &ItemStruct,
+    expr: &Expr,
+    field: &Field,
+) -> TokenStream {
+    let nft = match expr {
+        Expr::Lit(ExprLit {
+            lit: Lit::Str(l), ..
+        }) => l,
+        _ => unreachable!(),
+    };
+
+    let (struct_name, attributes, fields) = get_struct_parts(schtruct);
+    let initialiser = quote!(<#struct_name>::default());
+    let (struct_name, attributes, fields) = get_struct_parts(schtruct);
+    TokenStream::from(quote! {
+        mod tests {
+            use super::*;
+
+            #(#attributes)*
+            struct #struct_name {
+                #fields
+            }
+
+            pub fn foo() {
+                let ob = #initialiser;
+                // let _f : #struct_name = ob.<#field>;
+            }
+        }
+    })
+}
+
+fn get_struct_parts(
+    schtruct: &ItemStruct,
+) -> (
+    &syn::Ident,
+    impl Iterator<Item = Attribute> + '_,
+    &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+) {
     let struct_name = &schtruct.ident;
 
     let attributes = schtruct.attrs.iter().filter_map(|attr| {
@@ -36,19 +108,6 @@ pub fn generate_test_stub_for_duplicate(schtruct: &ItemStruct, expr: &Expr) -> T
         Fields::Unnamed(ref f) => &f.unnamed,
         Fields::Unit => todo!(),
     };
-    let initialiser = quote!(<#duplicated_name>::default());
-    TokenStream::from(quote! {
-        mod tests {
-            use super::*;
 
-            #(#attributes)*
-            struct #struct_name {
-                #fields
-            }
-
-            pub fn foo() {
-                let f = #initialiser;
-            }
-        }
-    })
+    (struct_name, attributes, fields)
 }
