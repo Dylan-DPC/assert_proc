@@ -1,12 +1,10 @@
-use proc_macro::TokenStream;
-use syn::Meta;
-use syn::{Attribute, ItemStruct, Fields};
 use core::iter::Extend;
+use proc_macro::TokenStream;
+use quote::{ToTokens, TokenStreamExt};
+use syn::Meta;
+use syn::{Attribute, Field, Fields, Ident, ItemStruct, Token, Type};
 
-pub const TYPE_OPTIONS: [&str; 2] = [
-    "assert_duplicated",
-    "assert_field_type",
-];
+pub const TYPE_OPTIONS: [&str; 2] = ["assert_duplicated", "assert_field_type"];
 
 pub fn prepare_tokens(schtruct: &ItemStruct) -> TokenStream {
     let (sigma, params) = schtruct.attrs.iter().fold((0, vec![]), |(mut sigma, mut params), attr| {
@@ -39,17 +37,76 @@ pub fn prepare_tokens(schtruct: &ItemStruct) -> TokenStream {
                 (sigma, params, fields)
             })
         },
-        _ => todo!()
+        _ => {
+            todo!()
+        }
     };
 
-    dbg!(&sigma);
-
-    crate::generator::generate_tokens(sigma, schtruct, &params, &fields) 
-
-
+    crate::generator::generate_tokens(sigma, schtruct, &params, &fields)
 }
 
-pub fn clean_up(attrs: &mut Vec<Attribute>) {
-    // attrs.drain_filter(|attr| attr.path().segments.first().unwrap().ident.to_string().starts_with("assert_"));
-    attrs.clear();
+pub struct FilteredField {
+    ident: Option<Ident>,
+    typ: Type,
+    attributes: Vec<Attribute>,
+}
+
+impl FilteredField {
+    pub fn new(field: Field, attributes: Vec<Attribute>) -> Self {
+        Self {
+            ident: field.ident,
+            typ: field.ty,
+            attributes,
+        }
+    }
+}
+
+impl ToTokens for FilteredField {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.append_all(&self.attributes);
+        if let Some(ident) = &self.ident {
+            ident.to_tokens(tokens);
+            let token = Token!(:)(proc_macro2::Span::call_site());
+            token.to_tokens(tokens);
+        }
+        self.typ.to_tokens(tokens);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    pub fn foo() {
+        let foo = syn::Field {
+            attrs: vec![],
+            vis: syn::Visibility::Inherited,
+            mutability: syn::FieldMutability::None,
+            ident: syn::parse_str("foo").unwrap(),
+            colon_token: Some(syn::parse_str(":").unwrap()),
+            ty: syn::Type::Path(syn::TypePath {
+                qself: None,
+                path: syn::parse_str("u32").unwrap(),
+            }),
+        };
+
+        let bracket = syn::token::Bracket::default();
+
+        let attribute = syn::Attribute {
+            pound_token: syn::token::Pound {
+                spans: [proc_macro2::Span::call_site()],
+            },
+            style: syn::AttrStyle::Outer,
+            bracket_token: bracket,
+            meta: syn::Meta::NameValue(syn::MetaNameValue {
+                path: syn::parse_str("must_use").unwrap(),
+                eq_token: syn::Token![=](proc_macro2::Span::call_site()),
+                value: syn::parse_str("u32").unwrap(),
+            }),
+        };
+
+        let filtered = FilteredField::new(foo, vec![attribute]);
+        dbg!(quote::quote!(#filtered));
+    }
 }

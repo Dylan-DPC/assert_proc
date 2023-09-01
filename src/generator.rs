@@ -1,6 +1,8 @@
+use crate::attributes::FilteredField;
 use proc_macro::TokenStream;
+use proc_macro2::Span;
 use quote::quote;
-use syn::{Attribute, Expr, ExprLit, Field, Fields, ItemStruct, Lit, Meta};
+use syn::{Attribute, Expr, ExprPath, Field, Fields, Ident, ItemStruct, Meta};
 
 pub fn generate_tokens(
     sigma: u8,
@@ -18,23 +20,23 @@ pub fn generate_tokens(
 #[allow(clippy::manual_let_else)]
 pub fn generate_stub_for_duplicate(schtruct: &ItemStruct, expr: &Expr) -> TokenStream {
     let duplicated_name = match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Str(l), ..
-        }) => l,
-        _ => unreachable!(),
+        Expr::Path(ExprPath { path: p, .. }) => p.get_ident().unwrap(),
+
+        _ => {
+            todo!()
+        }
     };
 
-    let duplicated_name: syn::Type = syn::parse_str(duplicated_name.value().as_str()).unwrap();
+    let duplicated_name = Ident::new(format!("{duplicated_name}").as_str(), Span::call_site());
     let initialiser = quote!(<#duplicated_name>::default());
     let (struct_name, attributes, fields) = get_struct_parts(schtruct);
-
     TokenStream::from(quote! {
         mod tests {
             use super::*;
 
             #(#attributes)*
             struct #struct_name {
-                #fields
+                #(#fields),*
             }
 
             pub fn foo() {
@@ -51,27 +53,30 @@ pub fn generate_stub_for_type_change(
     field: &Field,
 ) -> TokenStream {
     let nft = match expr {
-        Expr::Lit(ExprLit {
-            lit: Lit::Str(l), ..
-        }) => l,
+        Expr::Path(ExprPath { path: p, .. }) => p.get_ident(),
         _ => unreachable!(),
     };
 
     let (struct_name, attributes, fields) = get_struct_parts(schtruct);
     let initialiser = quote!(<#struct_name>::default());
-    let (struct_name, attributes, fields) = get_struct_parts(schtruct);
+    let f = if let Field { ident: Some(f), .. } = field {
+        Ident::new(format!("{f}").as_str(), Span::call_site())
+    } else {
+        todo!()
+    };
+
     TokenStream::from(quote! {
         mod tests {
             use super::*;
 
             #(#attributes)*
             struct #struct_name {
-                #fields
+                #(#fields),*
             }
 
             pub fn foo() {
                 let ob = #initialiser;
-                // let _f : #struct_name = ob.<#field>;
+                let f: #nft = ob.#f;
             }
         }
     })
@@ -80,34 +85,76 @@ pub fn generate_stub_for_type_change(
 fn get_struct_parts(
     schtruct: &ItemStruct,
 ) -> (
-    &syn::Ident,
+    &Ident,
     impl Iterator<Item = Attribute> + '_,
-    &syn::punctuated::Punctuated<syn::Field, syn::token::Comma>,
+    impl Iterator<Item = FilteredField> + '_,
 ) {
     let struct_name = &schtruct.ident;
 
     let attributes = schtruct.attrs.iter().filter_map(|attr| {
-        match attr.meta {
-            Meta::Path(ref p) if let Some(path) = p.get_ident() && path.to_string().starts_with("assert_") => {
-                Option::<Attribute>::None
-            },
-
-            Meta::NameValue(ref nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => {
+        match &attr.meta {
+            Meta::Path(p) if let Some(path) = p.get_ident() && path.to_string().starts_with("assert_") => {
                 None
             },
 
-            _ => {
+            Meta::Path(p) if let Some(path) = p.get_ident() => {
                 Some(syn::parse_quote!(#attr))
             },
 
+            Meta::List(ml) if let Some(path) = ml.path.get_ident() && path.to_string().starts_with("assert_") => {
+                None
+            }
+
+            Meta::List(ml) if let Some(path) = ml.path.get_ident() => {
+                Some(syn::parse_quote!(#attr))
+            },
+
+            Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => {
+                None
+            }
+
+            Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() => {
+                Some(syn::parse_quote!(#attr))
+            }
+
+            _ => unreachable!()
         }
     });
 
-    let fields = match schtruct.fields {
-        Fields::Named(ref f) => &f.named,
-        Fields::Unnamed(ref f) => &f.unnamed,
+    let fields = match &schtruct.fields {
+        Fields::Named(f) => &f.named,
+        Fields::Unnamed(f) => &f.unnamed,
         Fields::Unit => todo!(),
     };
+
+    let fields = fields.iter().map(|field| {
+        let attr = field.attrs.iter().filter_map(|attr| {
+        match &attr.meta {
+            Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => {
+                None
+            }
+
+            Meta::Path(p) if let Some(path) = p.get_ident() && path.to_string().starts_with("assert_") => {
+                None
+            }
+
+            Meta::Path(p) if let Some(p) = p.get_ident() => {
+                Some(attr.clone())
+            }
+
+            Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() => {
+                Some(attr.clone())
+            },
+
+
+        _ => {
+            todo!()
+        }
+        }
+        });
+
+        FilteredField::new(field.clone(), attr.collect())
+    });
 
     (struct_name, attributes, fields)
 }
