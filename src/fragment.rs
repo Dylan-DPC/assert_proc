@@ -23,14 +23,14 @@ impl FilteredField {
 
 #[derive(Clone)]
 pub struct FilteredVariant {
-    attributes: Vec<Attribute>,
+    pub attributes: Vec<Attribute>,
     ident: Ident,
     fields: Fields,
     discriminant: Option<(Eq, Expr)>,
 }
 
 impl FilteredVariant {
-    fn new(variant: Variant, attributes: Vec<Attribute>) -> Self {
+    pub fn new(variant: Variant, attributes: Vec<Attribute>) -> Self {
         Self {
             ident: variant.ident,
             fields: variant.fields,

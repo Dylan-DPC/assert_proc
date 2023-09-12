@@ -32,8 +32,9 @@ pub fn generate_stub_for_duplicate_struct(schtruct: &ItemStruct, expr: &Expr) ->
     let duplicated_name = Ident::new(format!("{duplicated_name}").as_str(), Span::call_site());
     let initialiser = quote!(<#duplicated_name>::default());
     let (struct_name, attributes, fields) = schtruct.get_parts();
+    let mod_name = Ident::new(format!("tests_{struct_name}").as_str(), Span::call_site());
     TokenStream::from(quote! {
-        mod tests {
+        mod #mod_name {
             use super::*;
 
             #(#attributes)*
@@ -53,8 +54,9 @@ pub fn generate_stub_for_duplicate_enum(enoom: &ItemEnum, expr: &Expr) -> TokenS
     let duplicated_name = Ident::new(format!("{duplicated_name}").as_str(), Span::call_site());
     let initialiser = quote!(<#duplicated_name>::default());
     let (enum_name, attributes, variants) = enoom.get_parts();
+    let mod_name = Ident::new(format!("tests_{enum_name}").as_str(), Span::call_site());
     TokenStream::from(quote! {
-        mod tests {
+        mod #mod_name {
             use super::*;
             #(#attributes)*
             enum #enum_name {

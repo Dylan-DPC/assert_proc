@@ -1,4 +1,4 @@
-use crate::fragment::{FilteredField, FilteredMember};
+use crate::fragment::{FilteredField, FilteredMember, FilteredVariant};
 use core::iter::Extend;
 use hasheimer::Hasheimer;
 use proc_macro::TokenStream;
@@ -21,8 +21,22 @@ pub fn prepare_tokens(item: &Item) -> TokenStream {
         Item::Struct(s) => s
             .fields
             .iter()
-            .map(|field| FilteredField::new(field.clone(), field.attrs.clone()))
+            .map(|field| {
+                FilteredMember::Field(FilteredField::new(field.clone(), field.attrs.clone()))
+            })
             .collect(),
+
+        Item::Enum(e) => e
+            .variants
+            .iter()
+            .map(|variant| {
+                FilteredMember::Variant(FilteredVariant::new(
+                    variant.clone(),
+                    variant.attrs.clone(),
+                ))
+            })
+            .collect(),
+
         _ => todo!(),
     };
 
@@ -63,15 +77,19 @@ fn reduce_type_attributes(attrs: &[Attribute]) -> (u8, Hasheimer<u8, Expr>) {
 #[allow(clippy::cast_possible_truncation)]
 #[allow(clippy::cmp_owned)]
 fn reduce_member_attributes(
-    field_attrs: &[FilteredField],
+    field_attrs: &[FilteredMember],
 ) -> (u8, Hasheimer<u8, Expr>, HashMap<u8, FilteredMember>) {
-    field_attrs.iter().fold((0, Hasheimer::default(), HashMap::default()), |(sigma, params, members), field| {
-        field.attributes.iter().fold((sigma, params, members), |(mut sigma_f, mut params_f, mut members_f), attr| {
+    field_attrs.iter().fold((0, Hasheimer::default(), HashMap::default()), |(sigma, params, members), member | {
+        let attributes = match member {
+            FilteredMember::Field(field) => field.attributes.iter(),
+            FilteredMember::Variant(variant) => variant.attributes.iter(),
+        };
+        attributes.fold((sigma, params, members), |(mut sigma_f, mut params_f, mut members_f), attr| {
             if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x ==mv.path.segments.first().unwrap().ident.to_string()) {
             let index = attrib as u8;
             sigma_f+= 1 << index;
             params_f.insert(index, mv.value.clone());
-            members_f.insert(index, FilteredMember::Field((*field).clone()));
+            members_f.insert(index, member.clone());
             }
         (sigma_f, params_f, members_f)
         })
