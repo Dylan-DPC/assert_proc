@@ -2,7 +2,6 @@ use crate::fragment::{FilteredField, FilteredMember, FilteredVariant};
 use core::iter::Extend;
 use hasheimer::Hasheimer;
 use proc_macro::TokenStream;
-use std::collections::HashMap;
 use syn::Meta;
 use syn::{Attribute, Expr, Item};
 
@@ -30,10 +29,18 @@ pub fn prepare_tokens(item: &Item) -> TokenStream {
             .variants
             .iter()
             .map(|variant| {
-                FilteredMember::Variant(FilteredVariant::new(
-                    variant.clone(),
-                    variant.attrs.clone(),
-                ))
+                let fv = FilteredVariant::new(variant.clone(), variant.attrs.clone());
+
+                if variant.fields.is_empty() {
+                    FilteredMember::Variant(fv)
+                } else {
+                    let fields = variant
+                        .fields
+                        .iter()
+                        .map(|field| FilteredField::new(field.clone(), field.attrs.clone()))
+                        .collect();
+                    FilteredMember::VariantData(fv, fields)
+                }
             })
             .collect(),
 
@@ -78,22 +85,63 @@ fn reduce_type_attributes(attrs: &[Attribute]) -> (u8, Hasheimer<u8, Expr>) {
 #[allow(clippy::cmp_owned)]
 fn reduce_member_attributes(
     field_attrs: &[FilteredMember],
-) -> (u8, Hasheimer<u8, Expr>, HashMap<u8, FilteredMember>) {
-    field_attrs.iter().fold((0, Hasheimer::default(), HashMap::default()), |(sigma, params, members), member | {
-        let attributes = match member {
-            FilteredMember::Field(field) => field.attributes.iter(),
-            FilteredMember::Variant(variant) => variant.attributes.iter(),
+) -> (u8, Hasheimer<u8, Expr>, Hasheimer<u8, FilteredMember>) {
+    let (sigma, params, members, _) = field_attrs.iter().fold((0, Hasheimer::default(), Hasheimer::default(), false), |(sigma, params, mut members, mut scanned), member | {
+
+        let (attributes, variant) = match member {
+            FilteredMember::Field(field) => (field.attributes.iter(), None),
+            FilteredMember::Variant(variant) => (variant.attributes.iter(), None),
+            FilteredMember::VariantData(variant, fields) => (variant.attributes.iter(), Some((variant, fields))),
         };
+        let (mut sigma_f, mut params_f, mut members_f) = if attributes.is_empty() {
+            members.insert(255u8, member.clone());
+            scanned = true;
+            (sigma, params, members)
+        } else {
         attributes.fold((sigma, params, members), |(mut sigma_f, mut params_f, mut members_f), attr| {
             if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x ==mv.path.segments.first().unwrap().ident.to_string()) {
             let index = attrib as u8;
             sigma_f+= 1 << index;
             params_f.insert(index, mv.value.clone());
             members_f.insert(index, member.clone());
+            scanned = true;
             }
-        (sigma_f, params_f, members_f)
+
+
+            (sigma_f, params_f, members_f)
         })
-    })
+        };
+
+        if let Some((variant, fields)) = variant  {
+        let (sigma_g, params_g, members_g) = (*fields).iter().fold((0, Hasheimer::<u8, Expr>::default(), Hasheimer::<u8, FilteredMember>::default()), |(mut sigma_g, mut params_g, mut members_g), field| {
+            let (sigma_h, params_h, members_h) = field.attributes.iter().fold((0, Hasheimer::default(), Hasheimer::<u8, FilteredMember>::default()), |(mut sigma_h, mut params_h, mut members_h), attr| {
+            if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x == mv.path.segments.first().unwrap().ident.to_string()) {
+                let index = attrib as u8;
+                sigma_h += 1 << index;
+                params_h.insert(index, mv.value.clone());
+                members_h.insert(index, FilteredMember::VariantData((*variant).clone(), fields.clone()));
+                scanned = true;
+            }
+            (sigma_h, params_h, members_h)
+            });
+
+            sigma_g += sigma_h;
+            params_g.extend(params_h);
+            members_g.extend(members_h);
+            (sigma_g, params_g, members_g)
+        });
+        sigma_f += sigma_g;
+        params_f.extend(params_g);
+        members_f.extend(members_g);
+        }
+
+       if !scanned {
+           members_f.insert(255, member.clone());
+       }
+
+        (sigma_f, params_f, members_f, false)
+    });
+    (sigma, params, members)
 }
 
 pub fn filter_attributes(attrs: &[Attribute]) -> impl Iterator<Item = Attribute> + '_ {

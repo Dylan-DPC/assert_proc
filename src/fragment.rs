@@ -1,3 +1,4 @@
+use hasheimer::{oom::OneOrMany, Hasheimer};
 use quote::{ToTokens, TokenStreamExt};
 use syn::{
     token::Eq, Attribute, Expr, ExprPath, Field, Fields, Ident, ItemEnum, ItemStruct, Meta, Token,
@@ -19,23 +20,105 @@ impl FilteredField {
             attributes,
         }
     }
+
+    pub fn from_raw(ident: Ident, typ: Type, attributes: Vec<Attribute>) -> Self {
+        Self {
+            ident: Some(ident),
+            typ,
+            attributes,
+        }
+    }
+
+    pub fn with_no_ident(typ: Type, attributes: Vec<Attribute>) -> Self {
+        Self {
+            ident: None,
+            typ,
+            attributes,
+        }
+    }
+}
+
+impl From<Field> for FilteredField {
+    fn from(field: Field) -> Self {
+        Self {
+            ident: field.ident,
+            typ: field.ty,
+            attributes: field.attrs,
+        }
+    }
+}
+
+impl ToTokens for FilteredField {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.append_all(&self.attributes);
+        if let Some(ident) = &self.ident {
+            ident.to_tokens(tokens);
+            let token = Token!(:)(proc_macro2::Span::call_site());
+            token.to_tokens(tokens);
+        }
+        self.typ.to_tokens(tokens);
+    }
 }
 
 #[derive(Clone)]
 pub struct FilteredVariant {
     pub attributes: Vec<Attribute>,
-    ident: Ident,
-    fields: Fields,
+    pub ident: Ident,
+    pub fields: Vec<FilteredField>,
     discriminant: Option<(Eq, Expr)>,
 }
 
 impl FilteredVariant {
     pub fn new(variant: Variant, attributes: Vec<Attribute>) -> Self {
+        let fields = match variant.fields {
+            Fields::Named(n) => n
+                .named
+                .iter()
+                .map(|field| {
+                    let field = field.clone();
+                    FilteredField::with_no_ident(field.ty, field.attrs)
+                })
+                .collect(),
+            Fields::Unnamed(un) => un
+                .unnamed
+                .iter()
+                .map(|field| field.clone().into())
+                .collect(),
+            Fields::Unit => vec![],
+        };
         Self {
             ident: variant.ident,
-            fields: variant.fields,
+            fields,
             discriminant: variant.discriminant,
             attributes,
+        }
+    }
+
+    pub fn from_raw(
+        ident: Ident,
+        fields: Vec<FilteredField>,
+        discriminant: Option<(Eq, Expr)>,
+        attributes: Vec<Attribute>,
+    ) -> Self {
+        Self {
+            attributes,
+            ident,
+            fields,
+            discriminant,
+        }
+    }
+}
+
+impl ToTokens for FilteredVariant {
+    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
+        tokens.append_all(&self.attributes);
+        self.ident.to_tokens(tokens);
+        self.fields.iter().for_each(|field| {
+            field.to_tokens(tokens);
+        });
+        if let Some((eq_token, disc)) = &self.discriminant {
+            eq_token.to_tokens(tokens);
+            disc.to_tokens(tokens);
         }
     }
 }
@@ -44,134 +127,171 @@ impl FilteredVariant {
 pub enum FilteredMember {
     Field(FilteredField),
     Variant(FilteredVariant),
+    VariantData(FilteredVariant, Vec<FilteredField>),
+}
+
+impl FilteredMember {
+    pub fn filter_crate_marker_attributes(self) -> Self {
+        match self {
+            Self::Field(field) => {
+                let attrs = field.attributes.into_iter().filter(|attr| {
+                        match &attr.meta {
+                        Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false, 
+                            Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
+                            _ => true
+                        }
+                    }).collect();
+
+                FilteredMember::Field(FilteredField::from_raw(
+                    field.ident.unwrap(),
+                    field.typ,
+                    attrs,
+                ))
+            }
+
+            Self::Variant(variant) => {
+                dbg!(&variant.ident);
+                let attrs = variant.attributes.into_iter().filter(|attr| {
+            match &attr.meta {
+                        Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false, 
+                            Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
+                            _ => true
+            }
+                    }).collect();
+
+                FilteredMember::Variant(FilteredVariant::from_raw(
+                    variant.ident,
+                    variant.fields,
+                    variant.discriminant,
+                    attrs,
+                ))
+            }
+
+            Self::VariantData(variant, fields) => {
+                let attrs = variant.attributes.into_iter().filter(|attr| {
+                match &attr.meta {
+                    Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false,
+                    Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
+                    _ => true
+
+                }
+            }).collect();
+
+                FilteredMember::VariantData(
+                    FilteredVariant::from_raw(
+                        variant.ident,
+                        variant.fields,
+                        variant.discriminant,
+                        attrs,
+                    ),
+                    fields,
+                )
+            }
+        }
+    }
 }
 
 impl ToTokens for FilteredMember {
     fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
         match self {
             Self::Field(ff) => {
-                tokens.append_all(&ff.attributes);
-                if let Some(ident) = &ff.ident {
-                    ident.to_tokens(tokens);
-                    let token = Token!(:)(proc_macro2::Span::call_site());
-                    token.to_tokens(tokens);
-                }
-                ff.typ.to_tokens(tokens);
+                ff.to_tokens(tokens);
             }
             Self::Variant(fv) => {
-                tokens.append_all(&fv.attributes);
-                fv.ident.to_tokens(tokens);
-                fv.fields.to_tokens(tokens);
-                if let Some((eq_token, disc)) = &fv.discriminant {
-                    eq_token.to_tokens(tokens);
-                    disc.to_tokens(tokens);
-                }
+                fv.to_tokens(tokens);
+            }
+            Self::VariantData(variant, vd) => {
+                vd.iter().for_each(|data| {
+                    tokens.append_all(&data.attributes);
+                    data.ident.to_tokens(tokens);
+                    if let Some(ident) = &data.ident {
+                        ident.to_tokens(tokens);
+                        let token = Token!(:)(proc_macro2::Span::call_site());
+                        token.to_tokens(tokens);
+                    }
+                });
             }
         }
     }
 }
 
 pub trait Disintegrate {
-    fn get_parts(
-        &self,
+    fn get_parts<'a>(
+        &'a self,
+        fields: &Hasheimer<u8, FilteredMember>,
     ) -> (
-        &syn::Ident,
+        &'a syn::Ident,
         impl Iterator<Item = Attribute> + '_,
-        impl Iterator<Item = FilteredMember> + '_,
+        Vec<FilteredMember>,
     );
 }
 
 impl Disintegrate for ItemStruct {
-    fn get_parts(
-        &self,
+    #[allow(clippy::needless_for_each)]
+    fn get_parts<'a>(
+        &'a self,
+        fields: &Hasheimer<u8, FilteredMember>,
     ) -> (
         &syn::Ident,
         impl Iterator<Item = Attribute> + '_,
-        impl Iterator<Item = FilteredMember> + '_,
+        Vec<FilteredMember>,
     ) {
         let struct_name = &self.ident;
 
         let attributes = crate::attributes::filter_attributes(&self.attrs);
+        let fields = fields.iter().fold(Vec::new(), |mut fields, (k, field)| {
+            match field {
+                OneOrMany::Single(f @ FilteredMember::Field(_)) => {
+                    fields.push(f.clone().filter_crate_marker_attributes());
+                }
 
-        let fields = match &self.fields {
-            Fields::Named(f) => &f.named,
-            Fields::Unnamed(f) => &f.unnamed,
-            Fields::Unit => todo!(),
-        };
+                OneOrMany::Many(v) => {
+                    v.iter().for_each(|field| {
+                        fields.push(field.clone().filter_crate_marker_attributes());
+                    });
+                }
 
-        let fields = fields.iter().map(|field| {
-        let attr = field.attrs.iter().filter_map(|attr| {
-        match &attr.meta {
-            Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => {
-                None
+                OneOrMany::Single(_) => todo!(),
             }
-
-            Meta::Path(p) if let Some(path) = p.get_ident() && path.to_string().starts_with("assert_") => {
-                None
-            }
-
-            Meta::Path(p) if let Some(p) = p.get_ident() => {
-                Some(attr.clone())
-            }
-
-            Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() => {
-                Some(attr.clone())
-            },
-
-
-        _ => {
-            todo!()
-        }
-        }
+            fields
         });
-
-        FilteredMember::Field(FilteredField::new(field.clone(), attr.collect()))
-    });
 
         (struct_name, attributes, fields)
     }
 }
 
 impl Disintegrate for ItemEnum {
+    #[allow(clippy::needless_for_each)]
     fn get_parts(
         &self,
+        fields: &Hasheimer<u8, FilteredMember>,
     ) -> (
         &syn::Ident,
         impl Iterator<Item = Attribute> + '_,
-        impl Iterator<Item = FilteredMember> + '_,
+        Vec<FilteredMember>,
     ) {
         let enum_name = &self.ident;
-        let attributes = crate::attributes::filter_attributes(&self.attrs);
 
-        let variants = self.variants.iter().map(|variant| {
-            let attr = variant.attrs.iter().filter_map(|attr| {
-                match &attr.meta {
-                    Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_")=> {
-                        None
+        let attributes = crate::attributes::filter_attributes(&self.attrs);
+        let fields: Vec<FilteredMember> =
+            fields.iter().fold(Vec::new(), |mut fields, (k, field)| {
+                match field {
+                    OneOrMany::Single(f @ FilteredMember::Field(_)) => {
+                        fields.push(f.clone().filter_crate_marker_attributes());
                     }
 
-            Meta::Path(p) if let Some(path) = p.get_ident() && path.to_string().starts_with("assert_") => {
-                None
-            }
+                    OneOrMany::Many(v) => {
+                        v.iter().for_each(|field| {
+                            fields.push(field.clone().filter_crate_marker_attributes());
+                        });
+                    }
 
-            Meta::Path(p) if let Some(p) = p.get_ident() => {
-                Some(attr.clone())
-            }
-
-            Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() => {
-                Some(attr.clone())
-            },
-
-
-        _ => {
-            todo!()
-        }
-        }
+                    OneOrMany::Single(_) => todo!("you as well"),
+                }
+                fields
             });
 
-        FilteredMember::Variant(FilteredVariant::new(variant.clone(), attr.collect()))
-        });
-        (enum_name, attributes, variants)
+        (enum_name, attributes, fields)
     }
 }
 
@@ -180,7 +300,48 @@ pub fn param_from_expr(expr: &Expr) -> &Ident {
         Expr::Path(ExprPath { path: p, .. }) => p.get_ident().unwrap(),
 
         _ => {
-            todo!()
+            todo!("if you reached here turn back")
         }
+    }
+}
+
+pub trait FilterAttributes {
+    fn filter_crate_marker_attributes(self) -> FilteredMember;
+}
+
+impl FilterAttributes for FilteredField {
+    fn filter_crate_marker_attributes(self) -> FilteredMember {
+        let attrs = self.attributes.into_iter().filter(|attr| {
+                        match &attr.meta {
+                        Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false, 
+                            Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
+                            _ => true
+                        }
+                    }).collect();
+
+        FilteredMember::Field(FilteredField::from_raw(
+            self.ident.unwrap(),
+            self.typ,
+            attrs,
+        ))
+    }
+}
+
+impl FilterAttributes for FilteredVariant {
+    fn filter_crate_marker_attributes(self) -> FilteredMember {
+        let attrs = self.attributes.into_iter().filter(|attr| {
+            match &attr.meta {
+                        Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false, 
+                            Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
+                            _ => true
+            }
+                    }).collect();
+
+        FilteredMember::Variant(FilteredVariant::from_raw(
+            self.ident,
+            self.fields,
+            self.discriminant,
+            attrs,
+        ))
     }
 }
