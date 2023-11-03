@@ -1,11 +1,10 @@
-use crate::fragment::{FilteredField, FilteredMember, FilteredVariant};
+use crate::proxy::{FilteredField, FilteredMember, FilteredVariant, MetaParam};
 use core::iter::Extend;
 use hasheimer::Hasheimer;
 use proc_macro::TokenStream;
-use syn::Meta;
-use syn::{Attribute, Expr, Item};
+use syn::{Attribute, Item, Meta};
 
-pub const TYPE_OPTIONS: [&str; 2] = ["assert_duplicated", "assert_field_type"];
+pub const TYPE_OPTIONS: [&str; 3] = ["assert_duplicated", "assert_field_type", "assert_value"];
 
 pub fn prepare_tokens(item: &Item) -> TokenStream {
     let attrs = match item {
@@ -55,27 +54,39 @@ pub fn prepare_tokens(item: &Item) -> TokenStream {
 }
 
 #[allow(clippy::cast_possible_truncation)]
-fn reduce_type_attributes(attrs: &[Attribute]) -> (u8, Hasheimer<u8, Expr>) {
+fn reduce_type_attributes(attrs: &[Attribute]) -> (u8, Hasheimer<u8, MetaParam>) {
     attrs
         .iter()
         .filter_map(|attr| {
-            if let Meta::NameValue(ref mv) = attr.meta {
-                Some((
-                    mv,
-                    TYPE_OPTIONS.iter().position(|x| {
-                        *x == mv.path.segments.first().unwrap().ident.to_string().as_str()
-                    }),
-                ))
-            } else {
-                None
+            match &attr.meta {
+                Meta::List(ml) if let Some(assert_pos) = TYPE_OPTIONS.iter().position(|x| *x == ml.path.segments.first().unwrap().ident.to_string().as_str()) => {
+                    Some((
+                        assert_pos,
+                        MetaParam::ListTokens(ml.tokens.clone())
+                    ))
+                },
+                Meta::NameValue(nv) if let Some(assert_pos) = TYPE_OPTIONS.iter().position(|x| *x == nv.path.segments.first().unwrap().ident.to_string().as_str()) => {
+                    Some((
+                         assert_pos,
+                        MetaParam::NameValueExpr(nv.value.clone())
+                    ))
+                },
+                Meta::Path(p) if let Some(assert_pos) = TYPE_OPTIONS.iter().position(|x| p.is_ident(x)) => {
+                    Some((
+                        assert_pos,
+                        MetaParam::Path,
+                    ))
+                },
+
+                _ => None
             }
         })
         .fold(
             (0, Hasheimer::default()),
-            |(mut sigma, mut params), (mv, attr)| {
-                let index = attr.unwrap() as u8;
+            |(mut sigma, mut params), (attr, meta_param)| {
+                let index = attr as u8;
                 sigma += 1 << index;
-                params.insert(index, mv.value.clone());
+                params.insert(index, meta_param);
                 (sigma, params)
             },
         )
@@ -85,7 +96,7 @@ fn reduce_type_attributes(attrs: &[Attribute]) -> (u8, Hasheimer<u8, Expr>) {
 #[allow(clippy::cmp_owned)]
 fn reduce_member_attributes(
     field_attrs: &[FilteredMember],
-) -> (u8, Hasheimer<u8, Expr>, Hasheimer<u8, FilteredMember>) {
+) -> (u8, Hasheimer<u8, MetaParam>, Hasheimer<u8, FilteredMember>) {
     let (sigma, params, members, _) = field_attrs.iter().fold((0, Hasheimer::default(), Hasheimer::default(), false), |(sigma, params, mut members, mut scanned), member | {
 
         let (attributes, variant) = match member {
@@ -99,10 +110,10 @@ fn reduce_member_attributes(
             (sigma, params, members)
         } else {
         attributes.fold((sigma, params, members), |(mut sigma_f, mut params_f, mut members_f), attr| {
-            if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x ==mv.path.segments.first().unwrap().ident.to_string()) {
+            if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x == dbg!(mv.path.segments.first().unwrap().ident.to_string())) {
             let index = attrib as u8;
             sigma_f+= 1 << index;
-            params_f.insert(index, mv.value.clone());
+            params_f.insert(index, MetaParam::NameValueExpr(mv.value.clone()));
             members_f.insert(index, member.clone());
             scanned = true;
             }
@@ -113,12 +124,12 @@ fn reduce_member_attributes(
         };
 
         if let Some((variant, fields)) = variant  {
-        let (sigma_g, params_g, members_g) = (*fields).iter().fold((0, Hasheimer::<u8, Expr>::default(), Hasheimer::<u8, FilteredMember>::default()), |(mut sigma_g, mut params_g, mut members_g), field| {
+        let (sigma_g, params_g, members_g) = (*fields).iter().fold((0, Hasheimer::<u8, MetaParam>::default(), Hasheimer::<u8, FilteredMember>::default()), |(mut sigma_g, mut params_g, mut members_g), field| {
             let (sigma_h, params_h, members_h) = field.attributes.iter().fold((0, Hasheimer::default(), Hasheimer::<u8, FilteredMember>::default()), |(mut sigma_h, mut params_h, mut members_h), attr| {
             if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x == mv.path.segments.first().unwrap().ident.to_string()) {
                 let index = attrib as u8;
                 sigma_h += 1 << index;
-                params_h.insert(index, mv.value.clone());
+                params_h.insert(index, MetaParam::NameValueExpr(mv.value.clone()));
                 members_h.insert(index, FilteredMember::VariantData((*variant).clone(), fields.clone()));
                 scanned = true;
             }

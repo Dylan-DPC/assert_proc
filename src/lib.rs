@@ -3,6 +3,8 @@
 #![feature(if_let_guard)]
 #![feature(return_position_impl_trait_in_trait)]
 #![feature(exact_size_is_empty)]
+#![feature(extend_one)]
+#![feature(iter_next_chunk)]
 #![deny(rust_2018_idioms)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::needless_for_each)]
@@ -12,6 +14,7 @@ use syn::{parse_macro_input, Item};
 mod attributes;
 mod fragment;
 mod generator;
+mod proxy;
 
 #[proc_macro_attribute]
 pub fn assert_proc(tokens: TokenStream, inputs: TokenStream) -> TokenStream {

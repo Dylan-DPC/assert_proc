@@ -1,229 +1,14 @@
+use crate::proxy::{FilteredField, FilteredMember, FilteredVariant, Structure};
 use hasheimer::{oom::OneOrMany, Hasheimer};
-use quote::{ToTokens, TokenStreamExt};
-use syn::{
-    token::Eq, Attribute, Expr, ExprPath, Field, Fields, Ident, ItemEnum, ItemStruct, Meta, Token,
-    Type, Variant,
-};
-
-#[derive(Clone)]
-pub struct FilteredField {
-    pub ident: Option<Ident>,
-    typ: Type,
-    pub attributes: Vec<Attribute>,
-}
-
-impl FilteredField {
-    pub fn new(field: Field, attributes: Vec<Attribute>) -> Self {
-        Self {
-            ident: field.ident,
-            typ: field.ty,
-            attributes,
-        }
-    }
-
-    pub fn from_raw(ident: Ident, typ: Type, attributes: Vec<Attribute>) -> Self {
-        Self {
-            ident: Some(ident),
-            typ,
-            attributes,
-        }
-    }
-
-    pub fn with_no_ident(typ: Type, attributes: Vec<Attribute>) -> Self {
-        Self {
-            ident: None,
-            typ,
-            attributes,
-        }
-    }
-}
-
-impl From<Field> for FilteredField {
-    fn from(field: Field) -> Self {
-        Self {
-            ident: field.ident,
-            typ: field.ty,
-            attributes: field.attrs,
-        }
-    }
-}
-
-impl ToTokens for FilteredField {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        tokens.append_all(&self.attributes);
-        if let Some(ident) = &self.ident {
-            ident.to_tokens(tokens);
-            let token = Token!(:)(proc_macro2::Span::call_site());
-            token.to_tokens(tokens);
-        }
-        self.typ.to_tokens(tokens);
-    }
-}
-
-#[derive(Clone)]
-pub struct FilteredVariant {
-    pub attributes: Vec<Attribute>,
-    pub ident: Ident,
-    pub fields: Vec<FilteredField>,
-    discriminant: Option<(Eq, Expr)>,
-}
-
-impl FilteredVariant {
-    pub fn new(variant: Variant, attributes: Vec<Attribute>) -> Self {
-        let fields = match variant.fields {
-            Fields::Named(n) => n
-                .named
-                .iter()
-                .map(|field| {
-                    let field = field.clone();
-                    FilteredField::with_no_ident(field.ty, field.attrs)
-                })
-                .collect(),
-            Fields::Unnamed(un) => un
-                .unnamed
-                .iter()
-                .map(|field| field.clone().into())
-                .collect(),
-            Fields::Unit => vec![],
-        };
-        Self {
-            ident: variant.ident,
-            fields,
-            discriminant: variant.discriminant,
-            attributes,
-        }
-    }
-
-    pub fn from_raw(
-        ident: Ident,
-        fields: Vec<FilteredField>,
-        discriminant: Option<(Eq, Expr)>,
-        attributes: Vec<Attribute>,
-    ) -> Self {
-        Self {
-            attributes,
-            ident,
-            fields,
-            discriminant,
-        }
-    }
-}
-
-impl ToTokens for FilteredVariant {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        tokens.append_all(&self.attributes);
-        self.ident.to_tokens(tokens);
-        self.fields.iter().for_each(|field| {
-            field.to_tokens(tokens);
-        });
-        if let Some((eq_token, disc)) = &self.discriminant {
-            eq_token.to_tokens(tokens);
-            disc.to_tokens(tokens);
-        }
-    }
-}
-
-#[derive(Clone)]
-pub enum FilteredMember {
-    Field(FilteredField),
-    Variant(FilteredVariant),
-    VariantData(FilteredVariant, Vec<FilteredField>),
-}
-
-impl FilteredMember {
-    pub fn filter_crate_marker_attributes(self) -> Self {
-        match self {
-            Self::Field(field) => {
-                let attrs = field.attributes.into_iter().filter(|attr| {
-                        match &attr.meta {
-                        Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false, 
-                            Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
-                            _ => true
-                        }
-                    }).collect();
-
-                FilteredMember::Field(FilteredField::from_raw(
-                    field.ident.unwrap(),
-                    field.typ,
-                    attrs,
-                ))
-            }
-
-            Self::Variant(variant) => {
-                dbg!(&variant.ident);
-                let attrs = variant.attributes.into_iter().filter(|attr| {
-            match &attr.meta {
-                        Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false, 
-                            Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
-                            _ => true
-            }
-                    }).collect();
-
-                FilteredMember::Variant(FilteredVariant::from_raw(
-                    variant.ident,
-                    variant.fields,
-                    variant.discriminant,
-                    attrs,
-                ))
-            }
-
-            Self::VariantData(variant, fields) => {
-                let attrs = variant.attributes.into_iter().filter(|attr| {
-                match &attr.meta {
-                    Meta::NameValue(nv) if let Some(path) = nv.path.get_ident() && path.to_string().starts_with("assert_") => false,
-                    Meta::Path(p) if let Some(p) = p.get_ident() && p.to_string().starts_with("assert_") => false,
-                    _ => true
-
-                }
-            }).collect();
-
-                FilteredMember::VariantData(
-                    FilteredVariant::from_raw(
-                        variant.ident,
-                        variant.fields,
-                        variant.discriminant,
-                        attrs,
-                    ),
-                    fields,
-                )
-            }
-        }
-    }
-}
-
-impl ToTokens for FilteredMember {
-    fn to_tokens(&self, tokens: &mut proc_macro2::TokenStream) {
-        match self {
-            Self::Field(ff) => {
-                ff.to_tokens(tokens);
-            }
-            Self::Variant(fv) => {
-                fv.to_tokens(tokens);
-            }
-            Self::VariantData(variant, vd) => {
-                vd.iter().for_each(|data| {
-                    tokens.append_all(&data.attributes);
-                    data.ident.to_tokens(tokens);
-                    if let Some(ident) = &data.ident {
-                        ident.to_tokens(tokens);
-                        let token = Token!(:)(proc_macro2::Span::call_site());
-                        token.to_tokens(tokens);
-                    }
-                });
-            }
-        }
-    }
-}
+use proc_macro2::{TokenStream as TokenStream2, TokenTree};
+use quote::ToTokens;
+use syn::{Attribute, Ident, ItemEnum, ItemStruct, Meta};
 
 pub trait Disintegrate {
     fn get_parts<'a>(
         &'a self,
         fields: &Hasheimer<u8, FilteredMember>,
-    ) -> (
-        &'a syn::Ident,
-        impl Iterator<Item = Attribute> + '_,
-        Vec<FilteredMember>,
-    );
+    ) -> Structure<'a, impl Iterator<Item = Attribute> + '_>;
 }
 
 impl Disintegrate for ItemStruct {
@@ -231,15 +16,11 @@ impl Disintegrate for ItemStruct {
     fn get_parts<'a>(
         &'a self,
         fields: &Hasheimer<u8, FilteredMember>,
-    ) -> (
-        &syn::Ident,
-        impl Iterator<Item = Attribute> + '_,
-        Vec<FilteredMember>,
-    ) {
+    ) -> Structure<'a, impl Iterator<Item = Attribute> + '_> {
         let struct_name = &self.ident;
 
         let attributes = crate::attributes::filter_attributes(&self.attrs);
-        let fields = fields.iter().fold(Vec::new(), |mut fields, (k, field)| {
+        let fields = fields.iter().fold(Vec::new(), |mut fields, (_, field)| {
             match field {
                 OneOrMany::Single(f @ FilteredMember::Field(_)) => {
                     fields.push(f.clone().filter_crate_marker_attributes());
@@ -251,30 +32,26 @@ impl Disintegrate for ItemStruct {
                     });
                 }
 
-                OneOrMany::Single(_) => todo!(),
+                OneOrMany::Single(_) => todo!("one or many is the other single"),
             }
             fields
         });
 
-        (struct_name, attributes, fields)
+        Structure::new(struct_name, attributes, fields)
     }
 }
 
 impl Disintegrate for ItemEnum {
     #[allow(clippy::needless_for_each)]
-    fn get_parts(
-        &self,
+    fn get_parts<'a>(
+        &'a self,
         fields: &Hasheimer<u8, FilteredMember>,
-    ) -> (
-        &syn::Ident,
-        impl Iterator<Item = Attribute> + '_,
-        Vec<FilteredMember>,
-    ) {
+    ) -> Structure<'a, impl Iterator<Item = Attribute> + '_> {
         let enum_name = &self.ident;
 
         let attributes = crate::attributes::filter_attributes(&self.attrs);
         let fields: Vec<FilteredMember> =
-            fields.iter().fold(Vec::new(), |mut fields, (k, field)| {
+            fields.iter().fold(Vec::new(), |mut fields, (_, field)| {
                 match field {
                     OneOrMany::Single(f @ FilteredMember::Field(_)) => {
                         fields.push(f.clone().filter_crate_marker_attributes());
@@ -291,17 +68,7 @@ impl Disintegrate for ItemEnum {
                 fields
             });
 
-        (enum_name, attributes, fields)
-    }
-}
-
-pub fn param_from_expr(expr: &Expr) -> &Ident {
-    match expr {
-        Expr::Path(ExprPath { path: p, .. }) => p.get_ident().unwrap(),
-
-        _ => {
-            todo!("if you reached here turn back")
-        }
+        Structure::new(enum_name, attributes, fields)
     }
 }
 
@@ -344,4 +111,71 @@ impl FilterAttributes for FilteredVariant {
             attrs,
         ))
     }
+}
+#[derive(Clone, Debug)]
+pub enum MetaExtractedValue<'a> {
+    ExprIdent(&'a Ident),
+    ListToken(Vec<TokenTree>),
+}
+
+impl ToTokens for MetaExtractedValue<'_> {
+    fn to_tokens(&self, tokens: &mut TokenStream2) {
+        match self {
+            Self::ExprIdent(id) => id.to_tokens(tokens),
+            Self::ListToken(lt) => lt.iter().for_each(|t| t.to_tokens(tokens)),
+        }
+    }
+}
+#[derive(Default, Clone, Copy, Debug)]
+enum ParseState {
+    #[default]
+    Empty,
+    FoundKey,
+    ValueStrip,
+    Seek,
+    Wind,
+}
+
+pub fn find_value_in_token<'a, S>(tokens: TokenStream2, key: S) -> Option<MetaExtractedValue<'a>>
+where
+    S: AsRef<str> + std::fmt::Debug + 'a,
+{
+    let tok_iter = tokens.into_iter();
+
+    let (_, buffer, found) = tok_iter.fold((ParseState::default(), vec![], false), |(state, mut buffer, found, ), tok| {
+        match (state, tok) {
+            (ParseState::Wind, _) => (state, buffer, found),
+            (ParseState::Empty, TokenTree::Ident(id)) if id == key => (ParseState::FoundKey, vec![], true),
+            (ParseState::Empty, TokenTree::Ident(_)) => (ParseState::Seek, vec![], found),
+            (ParseState::Empty, TokenTree::Punct(_)) => (ParseState::Seek, buffer, found),
+            (ParseState::FoundKey, TokenTree::Punct(pun)) if pun.as_char() == '=' => (ParseState::ValueStrip, buffer, found),
+            (ParseState::ValueStrip, TokenTree::Punct(pun)) if pun.as_char() == '=' => {
+                let _ = buffer.pop();
+                (ParseState::Wind, buffer, found)
+            },
+            (ParseState::ValueStrip, tauk)  => {
+                buffer.push(tauk);
+                (ParseState::ValueStrip, buffer, found)
+            },
+            (ParseState::Seek, TokenTree::Ident(ref id)) if buffer.is_empty() => {
+                buffer.push(TokenTree::Ident(id.clone()));
+                (ParseState::Seek, buffer, found)
+            },
+
+            (ParseState::Seek, TokenTree::Ident(ref id)) if buffer.len() == 1 => {
+                buffer[0] = TokenTree::Ident(id.clone());
+                (ParseState::Seek, buffer, found)
+            },
+            (ParseState::Seek, TokenTree::Punct(pun)) if pun.as_char() == '=' && buffer.len() <= 1 && let Some(TokenTree::Ident(id)) = buffer.get(0) && *id == key => {
+                buffer.clear();
+                (ParseState::ValueStrip, buffer, true)
+            },
+            (ParseState::Seek, TokenTree::Punct(pun)) if pun.as_char() == '=' && buffer.len() <= 1 => {
+                (ParseState::Seek, buffer, found)
+            },
+            _ => panic!("malformed attribute"),
+        }
+    });
+
+    found.then_some(MetaExtractedValue::ListToken(buffer))
 }
