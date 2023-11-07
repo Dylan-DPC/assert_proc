@@ -110,7 +110,7 @@ fn reduce_member_attributes(
             (sigma, params, members)
         } else {
         attributes.fold((sigma, params, members), |(mut sigma_f, mut params_f, mut members_f), attr| {
-            if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x == dbg!(mv.path.segments.first().unwrap().ident.to_string())) {
+            if let Meta::NameValue(ref mv) = attr.meta && let Some(attrib) = TYPE_OPTIONS.iter().position(|x| *x == mv.path.segments.first().unwrap().ident.to_string()) {
             let index = attrib as u8;
             sigma_f+= 1 << index;
             params_f.insert(index, MetaParam::NameValueExpr(mv.value.clone()));
@@ -122,7 +122,6 @@ fn reduce_member_attributes(
             (sigma_f, params_f, members_f)
         })
         };
-
         if let Some((variant, fields)) = variant  {
         let (sigma_g, params_g, members_g) = (*fields).iter().fold((0, Hasheimer::<u8, MetaParam>::default(), Hasheimer::<u8, FilteredMember>::default()), |(mut sigma_g, mut params_g, mut members_g), field| {
             let (sigma_h, params_h, members_h) = field.attributes.iter().fold((0, Hasheimer::default(), Hasheimer::<u8, FilteredMember>::default()), |(mut sigma_h, mut params_h, mut members_h), attr| {

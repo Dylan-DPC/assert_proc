@@ -8,6 +8,7 @@
 #![deny(rust_2018_idioms)]
 #![allow(clippy::module_name_repetitions)]
 #![allow(clippy::needless_for_each)]
+
 use proc_macro::TokenStream;
 use syn::{parse_macro_input, Item};
 

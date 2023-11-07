@@ -28,7 +28,7 @@ pub fn generate_tokens(
         }
 
         (5, Item::Struct(schtruct)) => {
-            generate_stub_for_duplicate_struct_with_value_initialised(schtruct, fields, exprs, 2)
+            generate_stub_for_duplicate_struct_with_value_initialised(schtruct, fields, exprs)
         }
 
         _ => todo!("silly"),
@@ -50,12 +50,7 @@ pub fn generate_stub_for_duplicate_struct(
         attributes,
         members,
     } = schtruct.get_parts(fields);
-    let duplicated_name = expr.ident().unwrap();
-    let initializer = if let MetaParam::ListTokens(lt) = expr {
-        crate::fragment::find_value_in_token(lt.clone(), "initializer")
-    } else {
-        todo!("not a list token eh?")
-    };
+    let (duplicated_name, initializer) = crate::fragment::get_params_for_duplicated(expr);
 
     TokenStream::from(quote! {
         mod #mod_name {
@@ -188,48 +183,32 @@ pub fn generate_stub_for_enum_data_change(enoom: &ItemEnum, fields: HashMap<u8, 
 
 }
 */
+
 pub fn generate_stub_for_duplicate_struct_with_value_initialised(
     schtruct: &ItemStruct,
     fields: &Hasheimer<u8, FilteredMember>,
-    expr: &Hasheimer<u8, MetaParam>,
-    offset: u8,
+    exprs: &Hasheimer<u8, MetaParam>,
 ) -> TokenStream {
-    let value = expr.get(&2).unwrap().first().unwrap().ident();
-
-    let field = fields.get(&offset);
-
+    let mod_name = mod_name(&schtruct.ident);
     let Structure {
         name,
         attributes,
         members,
-        ..
     } = schtruct.get_parts(fields);
-    let initialiser = quote!(<#name>::default());
+    let (duplicated_name, initializer) =
+        crate::fragment::get_params_for_duplicated(exprs.get_if_single(&0).unwrap());
 
-    let duplicated_name = expr.get(&0).unwrap().first().unwrap().ident();
-
-    let rhs = match expr.get(&2) {
-        Some(OneOrMany::Single(mp)) => vec![mp.ident().unwrap()],
-        Some(OneOrMany::Many(es)) => es.into_iter().filter_map(|expr| expr.ident()).collect(),
-        _ => todo!("neither one nor many"),
-    };
-
-    //
-
-    let (fs, es) = match (fields.get(&2), expr.get(&2)) {
-        (Some(OneOrMany::Single(v)), Some(OneOrMany::Single(MetaParam::NameValueExpr(e)))) => {
-            if let FilteredMember::Field(f) = v {
-                (vec![f.ident.clone()], vec![ParseableExpr(e.clone())])
-            } else {
-                todo!()
-            }
-        }
+    let (fs, es) = match (fields.get(&2), exprs.get(&2)) {
+        (
+            Some(OneOrMany::Single(FilteredMember::Field(v))),
+            Some(OneOrMany::Single(MetaParam::NameValueExpr(e))),
+        ) => (vec![v.ident.clone()], vec![ParseableExpr(e.clone())]),
         _ => todo!(),
     };
 
     TokenStream::from(quote! {
         // #[cfg(test)]
-        mod tests {
+        mod #mod_name {
             use super::*;
 
             #(#attributes)*
@@ -237,11 +216,13 @@ pub fn generate_stub_for_duplicate_struct_with_value_initialised(
                 #(#members),*
             }
 
-            #[test]
+
+
+            // #[test]
             pub fn foo() {
-                let ob = FooMock::mock_new();
+                let ob = <#duplicated_name>::#initializer;
                 if (#(ob.#fs),*) != (#(#es),*) {
-                    panic!("get out of here");
+                   panic!("value in type doesn't match the asserted value")
                 }
 
                 // assert_eq!((#(ob.#fs),*), (#(#es),*));

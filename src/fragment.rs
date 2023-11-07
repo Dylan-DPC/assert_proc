@@ -1,4 +1,4 @@
-use crate::proxy::{FilteredField, FilteredMember, FilteredVariant, Structure};
+use crate::proxy::{FilteredField, FilteredMember, FilteredVariant, MetaParam, Structure};
 use hasheimer::{oom::OneOrMany, Hasheimer};
 use proc_macro2::{TokenStream as TokenStream2, TokenTree};
 use quote::ToTokens;
@@ -143,6 +143,7 @@ where
     let tok_iter = tokens.into_iter();
 
     let (_, buffer, found) = tok_iter.fold((ParseState::default(), vec![], false), |(state, mut buffer, found, ), tok| {
+
         match (state, tok) {
             (ParseState::Wind, _) => (state, buffer, found),
             (ParseState::Empty, TokenTree::Ident(id)) if id == key => (ParseState::FoundKey, vec![], true),
@@ -178,4 +179,17 @@ where
     });
 
     found.then_some(MetaExtractedValue::ListToken(buffer))
+}
+
+pub fn get_params_for_duplicated(
+    expr: &MetaParam,
+) -> (MetaExtractedValue<'_>, Option<MetaExtractedValue<'_>>) {
+    let duplicated_name = expr.ident();
+    let initialiser = if let MetaParam::ListTokens(lt) = expr {
+        find_value_in_token(lt.clone(), "initializer")
+    } else {
+        None
+    };
+
+    (duplicated_name.unwrap(), initialiser)
 }
