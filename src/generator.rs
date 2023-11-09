@@ -50,7 +50,10 @@ pub fn generate_stub_for_duplicate_struct(
         attributes,
         members,
     } = schtruct.get_parts(fields);
-    let (duplicated_name, initializer) = crate::fragment::get_params_for_duplicated(expr);
+    let initialiser = match crate::fragment::get_params_for_duplicated(expr) {
+        (name, Some(init)) => quote!(<#name>::#init),
+        (name, _) => quote!(<#name>::default()),
+    };
 
     TokenStream::from(quote! {
         mod #mod_name {
@@ -62,7 +65,7 @@ pub fn generate_stub_for_duplicate_struct(
             }
 
             pub fn foo() {
-                let f = <#duplicated_name>::#initializer;
+                let f = #initialiser;
             }
         }
     })
@@ -92,6 +95,7 @@ pub fn generate_stub_for_duplicate_enum(
 
             pub fn foo() {
                 let f = #initialiser;
+
             }
         }
     })
@@ -195,8 +199,11 @@ pub fn generate_stub_for_duplicate_struct_with_value_initialised(
         attributes,
         members,
     } = schtruct.get_parts(fields);
-    let (duplicated_name, initializer) =
-        crate::fragment::get_params_for_duplicated(exprs.get_if_single(&0).unwrap());
+    let initialiser =
+        match crate::fragment::get_params_for_duplicated(exprs.get_if_single(&0).unwrap()) {
+            (name, Some(init)) => quote!(<#name>::#init),
+            (name, _) => quote!(<#name>::default()),
+        };
 
     let (fs, es) = match (fields.get(&2), exprs.get(&2)) {
         (
@@ -220,12 +227,11 @@ pub fn generate_stub_for_duplicate_struct_with_value_initialised(
 
             // #[test]
             pub fn foo() {
-                let ob = <#duplicated_name>::#initializer;
+                let ob = #initialiser;
                 if (#(ob.#fs),*) != (#(#es),*) {
                    panic!("value in type doesn't match the asserted value")
                 }
 
-                // assert_eq!((#(ob.#fs),*), (#(#es),*));
             }
         }
     })
