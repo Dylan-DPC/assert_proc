@@ -1,3 +1,4 @@
+use crate::generator::TokenGenerator;
 use crate::proxy::{FilteredField, FilteredMember, FilteredVariant, MetaParam};
 use core::iter::Extend;
 use hasheimer::Hasheimer;
@@ -50,7 +51,8 @@ pub fn prepare_tokens(item: &Item) -> TokenStream {
     sigma += sigma_f;
     params.extend(params_f);
 
-    crate::generator::generate_tokens(sigma, item, &params, &members_f)
+    let generator = TokenGenerator::new(sigma, item, &params, &members_f);
+    TokenStream::from(generator.generate())
 }
 
 #[allow(clippy::cast_possible_truncation)]

@@ -1,104 +1,121 @@
 use crate::fragment::Disintegrate;
 use crate::proxy::{FilteredField, FilteredMember, MetaParam, ParseableExpr, Structure};
 use hasheimer::{oom::OneOrMany, Hasheimer};
-use proc_macro::TokenStream;
-use proc_macro2::Span;
+use proc_macro2::{Span, TokenStream};
 use quote::quote;
 use syn::{Expr, ExprPath, Ident, Item, ItemEnum, ItemStruct};
 
-pub fn generate_tokens(
+pub struct TokenGenerator<'a> {
     sigma: u8,
-    item: &Item,
-    exprs: &Hasheimer<u8, MetaParam>,
-    fields: &Hasheimer<u8, FilteredMember>,
-) -> TokenStream {
-    match (sigma, item) {
-        (1, Item::Struct(schtruct)) => {
-            generate_stub_for_duplicate_struct(schtruct, fields, exprs.get_if_single(&0u8).unwrap())
-        }
-        (1, Item::Enum(enoom)) => {
-            generate_stub_for_duplicate_enum(enoom, fields, exprs.get_if_single(&0).unwrap())
-        }
-        (2, Item::Struct(schtruct)) => {
-            generate_stub_for_type_change(schtruct, fields, exprs.get(&1).unwrap(), 1)
-        }
-        (2, Item::Enum(enoom)) => {
-            todo!()
-            // generate_stub_for_enum_data_change(enoom, fields, exprs.get(&1).unwrap(), fields.get(&1).unwrap())
-        }
+    item: &'a Item,
+    exprs: &'a Hasheimer<u8, MetaParam>,
+    fields: &'a Hasheimer<u8, FilteredMember>,
+    tokens: TokenStream,
+}
 
-        (5, Item::Struct(schtruct)) => {
-            generate_stub_for_duplicate_struct_with_value_initialised(schtruct, fields, exprs)
+impl<'a> TokenGenerator<'a> {
+    pub fn new(
+        sigma: u8,
+        item: &'a Item,
+        exprs: &'a Hasheimer<u8, MetaParam>,
+        fields: &'a Hasheimer<u8, FilteredMember>,
+    ) -> Self {
+        Self {
+            sigma,
+            item,
+            exprs,
+            fields,
+            tokens: TokenStream::default(),
         }
+    }
 
-        _ => todo!("silly"),
+    pub fn generate(&self) -> TokenStream {
+        match self.sigma {
+            1 => self.duplicate(),
+            /*
+            (2, Item::Struct(schtruct)) => {
+                generate_stub_for_type_change(schtruct, fields, exprs.get(&1).unwrap(), 1)
+            }
+            (2, Item::Enum(enoom)) => {
+                todo!()
+                // generate_stub_for_enum_data_change(enoom, fields, exprs.get(&1).unwrap(), fields.get(&1).unwrap())
+            }
+
+            (5, Item::Struct(schtruct)) => {
+                let tokens = generate_stub_for_duplicate_struct(schtruct, fields, exprs.get_if_single(&0u8).unwrap());
+                generate_stub_for_value_initialised(schtruct, tokens, fields, exprs)
+            }
+            */
+            _ => todo!("silly"),
+        }
+    }
+
+    fn duplicate(&self) -> TokenStream {
+        let expr = self.exprs.get_if_single(&0).unwrap();
+        match self.item {
+            Item::Struct(schtruct) => {
+                let mod_name = mod_name(&schtruct.ident);
+                let Structure {
+                    name,
+                    attributes,
+                    members,
+                } = schtruct.get_parts(self.fields);
+                let initialiser = match crate::fragment::get_params_for_duplicated(expr) {
+                    (name, Some(init)) => quote!(<#name>::#init),
+                    (name, _) => quote!(<#name>::default()),
+                };
+
+                quote! {
+                mod #mod_name {
+                    use super::*;
+
+                    #(#attributes)*
+                    struct #name{
+                        #(#members),*
+                    }
+
+                    pub fn foo() {
+                        let f = #initialiser;
+                    }
+                }
+                }
+            }
+            Item::Enum(enoom) => {
+                let mod_name = mod_name(&enoom.ident);
+                let Structure {
+                    name,
+                    attributes,
+                    members,
+                } = enoom.get_parts(self.fields);
+
+                let initialiser = match crate::fragment::get_params_for_duplicated(expr) {
+                    (name, Some(init)) => quote!(<#name>::#init),
+                    (name, _) => quote!(<#name>::default()),
+                };
+
+                quote! {
+                mod #mod_name {
+                    use super::*;
+
+                    #(#attributes)*
+                    enum #name{
+                        #(#members),*
+                    }
+
+                    pub fn foo() {
+                        let f = #initialiser;
+                    }
+                }
+                }
+            }
+
+            _ => todo!("unit"),
+        }
     }
 }
+
 pub fn mod_name(name: &Ident) -> Ident {
     Ident::new(format!("tests_{name}").as_str(), Span::call_site())
-}
-
-#[allow(clippy::manual_let_else)]
-pub fn generate_stub_for_duplicate_struct(
-    schtruct: &ItemStruct,
-    fields: &Hasheimer<u8, FilteredMember>,
-    expr: &MetaParam,
-) -> TokenStream {
-    let mod_name = mod_name(&schtruct.ident);
-    let Structure {
-        name,
-        attributes,
-        members,
-    } = schtruct.get_parts(fields);
-    let initialiser = match crate::fragment::get_params_for_duplicated(expr) {
-        (name, Some(init)) => quote!(<#name>::#init),
-        (name, _) => quote!(<#name>::default()),
-    };
-
-    TokenStream::from(quote! {
-        mod #mod_name {
-            use super::*;
-
-            #(#attributes)*
-            struct #name{
-                #(#members),*
-            }
-
-            pub fn foo() {
-                let f = #initialiser;
-            }
-        }
-    })
-}
-
-pub fn generate_stub_for_duplicate_enum(
-    enoom: &ItemEnum,
-    fields: &Hasheimer<u8, FilteredMember>,
-    expr: &MetaParam,
-) -> TokenStream {
-    let duplicated_name = expr.ident().unwrap();
-    let initialiser = quote!(<#duplicated_name>::default());
-    let Structure {
-        name,
-        attributes,
-        members,
-        ..
-    } = enoom.get_parts(fields);
-    let mod_name = Ident::new(format!("tests_{name}").as_str(), Span::call_site());
-    TokenStream::from(quote! {
-        mod #mod_name {
-            use super::*;
-            #(#attributes)*
-            enum #name{
-                #(#members),*
-            }
-
-            pub fn foo() {
-                let f = #initialiser;
-
-            }
-        }
-    })
 }
 
 #[allow(clippy::manual_let_else)]
@@ -132,7 +149,7 @@ pub fn generate_stub_for_type_change(
     } else {
         todo!()
     };
-    TokenStream::from(quote! {
+    quote! {
         mod tests {
             use super::*;
 
@@ -146,7 +163,7 @@ pub fn generate_stub_for_type_change(
                 let f: #nft = ob.#f;
             }
         }
-    })
+    }
 }
 
 /*
@@ -188,8 +205,18 @@ pub fn generate_stub_for_enum_data_change(enoom: &ItemEnum, fields: HashMap<u8, 
 }
 */
 
-pub fn generate_stub_for_duplicate_struct_with_value_initialised(
+pub fn generate_stub_for_value_initialised(
     schtruct: &ItemStruct,
+    tokens: TokenStream,
+    fields: &Hasheimer<u8, FilteredMember>,
+    exprs: &Hasheimer<u8, MetaParam>,
+) -> TokenStream {
+    todo!()
+}
+
+pub fn pgenerate_stub_for_value_initialised(
+    schtruct: &ItemStruct,
+    tokens: TokenStream,
     fields: &Hasheimer<u8, FilteredMember>,
     exprs: &Hasheimer<u8, MetaParam>,
 ) -> TokenStream {
@@ -213,7 +240,7 @@ pub fn generate_stub_for_duplicate_struct_with_value_initialised(
         _ => todo!(),
     };
 
-    TokenStream::from(quote! {
+    quote! {
         // #[cfg(test)]
         mod #mod_name {
             use super::*;
@@ -234,5 +261,5 @@ pub fn generate_stub_for_duplicate_struct_with_value_initialised(
 
             }
         }
-    })
+    }
 }
